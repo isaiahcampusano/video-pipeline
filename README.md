@@ -96,3 +96,21 @@ Chunk objects use `videos/{id}/chunks/chunk_0000.ts`. The original uses `videos/
 ## Production notes
 
 For AWS, point the same S3 client at S3 (and normally omit the custom endpoint), run the API and worker as separate ECS/Fargate services, use RDS PostgreSQL and ElastiCache Redis, inject secrets from Secrets Manager, and place the API behind a TLS-enabled load balancer/API gateway. Scale workers independently and give each task enough ephemeral disk for an original video plus one chunk.
+
+## Low-cost AWS pilot
+
+The repository also includes a deliberately small pilot deployment in `deploy/pilot-cloudformation.yml`. It creates one `t3.small` EC2 instance, a private S3 bucket, a stable Elastic IP, HTTPS through Caddy, and Systems Manager access without exposing SSH. PostgreSQL and Redis run on the same instance, so this option is suitable for demos and early validation rather than high availability.
+
+The pilot API key is generated during bootstrap and stored as a SecureString at `/video-pipeline/pilot/api-key` in Systems Manager Parameter Store. The S3 client uses the EC2 instance role, so no long-lived AWS access keys are written to disk.
+
+Deploy the stack from an authenticated AWS shell:
+
+```bash
+aws cloudformation deploy \
+  --region us-east-1 \
+  --stack-name video-pipeline-pilot \
+  --template-file deploy/pilot-cloudformation.yml \
+  --capabilities CAPABILITY_IAM
+```
+
+After deployment, read the `HealthUrl` stack output. Initial boot, image builds, and public certificate issuance can take several minutes.

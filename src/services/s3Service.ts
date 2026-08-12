@@ -8,18 +8,24 @@ import {
   HeadBucketCommand,
   PutObjectCommand,
   S3Client,
+  type S3ClientConfig,
 } from "@aws-sdk/client-s3";
 import { config } from "../config.js";
 
-export const s3Client = new S3Client({
-  endpoint: config.s3.endpoint,
+const s3Config: S3ClientConfig = {
   region: config.s3.region,
   forcePathStyle: config.s3.forcePathStyle,
-  credentials: {
+};
+
+if (config.s3.endpoint) s3Config.endpoint = config.s3.endpoint;
+if (config.s3.accessKey && config.s3.secretKey) {
+  s3Config.credentials = {
     accessKeyId: config.s3.accessKey,
     secretAccessKey: config.s3.secretKey,
-  },
-});
+  };
+}
+
+export const s3Client = new S3Client(s3Config);
 
 export async function ensureBucket(): Promise<void> {
   try {

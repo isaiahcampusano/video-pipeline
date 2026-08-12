@@ -9,6 +9,11 @@ function stringEnv(name: string, fallback?: string): string {
   return value;
 }
 
+function optionalStringEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
+}
+
 function positiveNumberEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   const value = raw === undefined ? fallback : Number(raw);
@@ -26,6 +31,12 @@ function booleanEnv(name: string, fallback: boolean): boolean {
   throw new Error(`${name} must be true or false`);
 }
 
+const s3AccessKey = optionalStringEnv("S3_ACCESS_KEY");
+const s3SecretKey = optionalStringEnv("S3_SECRET_KEY");
+if ((s3AccessKey && !s3SecretKey) || (!s3AccessKey && s3SecretKey)) {
+  throw new Error("S3_ACCESS_KEY and S3_SECRET_KEY must be provided together");
+}
+
 export const config = Object.freeze({
   port: positiveNumberEnv("PORT", 3000),
   databaseUrl: stringEnv(
@@ -34,10 +45,10 @@ export const config = Object.freeze({
   ),
   redisUrl: stringEnv("REDIS_URL", "redis://localhost:6379"),
   s3: {
-    endpoint: stringEnv("S3_ENDPOINT", "http://localhost:9000"),
+    endpoint: optionalStringEnv("S3_ENDPOINT"),
     bucket: stringEnv("S3_BUCKET", "video-pipeline-dev"),
-    accessKey: stringEnv("S3_ACCESS_KEY", "minioadmin"),
-    secretKey: stringEnv("S3_SECRET_KEY", "minioadmin"),
+    accessKey: s3AccessKey,
+    secretKey: s3SecretKey,
     region: stringEnv("S3_REGION", "us-east-1"),
     forcePathStyle: booleanEnv("S3_FORCE_PATH_STYLE", true),
   },

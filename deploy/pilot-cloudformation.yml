@@ -1,0 +1,257 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Low-cost single-instance pilot for the video pipeline.
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues:
+      - t3.small
+      - t3.medium
+    Description: t3.small is the low-cost default; t3.medium provides more FFmpeg headroom.
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Resources:
+  PilotVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: video-pipeline-pilot
+
+  PilotInternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  PilotGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref PilotInternetGateway
+      VpcId: !Ref PilotVpc
+
+  PilotSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.42.1.0/24
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref PilotVpc
+      Tags:
+        - Key: Name
+          Value: video-pipeline-pilot-public
+
+  PilotRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref PilotVpc
+
+  PilotPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: PilotGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref PilotInternetGateway
+      RouteTableId: !Ref PilotRouteTable
+
+  PilotSubnetRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PilotRouteTable
+      SubnetId: !Ref PilotSubnet
+
+  PilotSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTPS for the video pipeline pilot; management uses SSM.
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: ACME HTTP challenge and HTTPS redirect
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Public HTTPS API
+      VpcId: !Ref PilotVpc
+
+  PilotBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: video-pipeline-pilot
+
+  PilotInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: VideoBucketAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt PilotBucket.Arn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "${PilotBucket.Arn}/*"
+        - PolicyName: StorePilotApiKey
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:GetParameter
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/video-pipeline/pilot/api-key"
+
+  PilotInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref PilotInstanceRole
+
+  PilotElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: video-pipeline-pilot
+
+  PilotInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: PilotPublicRoute
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref PilotInstanceProfile
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: false
+          DeleteOnTermination: true
+          DeviceIndex: "0"
+          GroupSet:
+            - !Ref PilotSecurityGroup
+          SubnetId: !Ref PilotSubnet
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            DeleteOnTermination: true
+            Encrypted: true
+            VolumeSize: 30
+            VolumeType: gp3
+      Tags:
+        - Key: Name
+          Value: video-pipeline-pilot
+        - Key: Project
+          Value: video-pipeline-pilot
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          exec > >(tee /var/log/video-pipeline-bootstrap.log | logger -t video-pipeline-bootstrap -s 2>/dev/console) 2>&1
+
+          dnf install -y docker git jq openssl
+          systemctl enable --now docker
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+            -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+          fallocate -l 2G /swapfile
+          chmod 600 /swapfile
+          mkswap /swapfile
+          swapon /swapfile
+          echo '/swapfile none swap sw 0 0' >> /etc/fstab
+
+          git clone --depth 1 https://github.com/isaiahcampusano/video-pipeline.git /opt/video-pipeline
+          cd /opt/video-pipeline
+
+          POSTGRES_PASSWORD=$(openssl rand -hex 24)
+          API_KEY=$(openssl rand -hex 32)
+          cat > .env <<ENVFILE
+          PORT=3000
+          DATABASE_URL=postgresql://user:$POSTGRES_PASSWORD@postgres:5432/videopipeline
+          POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+          REDIS_URL=redis://redis:6379
+          S3_BUCKET=${PilotBucket}
+          S3_REGION=${AWS::Region}
+          S3_FORCE_PATH_STYLE=false
+          TEMP_DIR=/tmp/video-pipeline
+          CHUNK_DURATION_SEC=10
+          WORKER_CONCURRENCY=1
+          API_KEY=$API_KEY
+          MAX_FILE_SIZE_BYTES=5368709120
+          LOG_LEVEL=info
+          PILOT_DOMAIN=${PilotElasticIp.PublicIp}.nip.io
+          ENVFILE
+          chmod 600 .env
+
+          aws ssm put-parameter \
+            --region ${AWS::Region} \
+            --name /video-pipeline/pilot/api-key \
+            --description 'API key for the video pipeline low-cost pilot' \
+            --type SecureString \
+            --value "$API_KEY" \
+            --overwrite
+
+          docker compose -f docker-compose.pilot.yml up --build -d
+
+  PilotElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt PilotElasticIp.AllocationId
+      InstanceId: !Ref PilotInstance
+
+Outputs:
+  PublicUrl:
+    Description: Public HTTPS base URL. Certificate issuance can take several minutes after launch.
+    Value: !Sub "https://${PilotElasticIp.PublicIp}.nip.io"
+  HealthUrl:
+    Value: !Sub "https://${PilotElasticIp.PublicIp}.nip.io/health"
+  InstanceId:
+    Value: !Ref PilotInstance
+  BucketName:
+    Value: !Ref PilotBucket
+  ApiKeyParameter:
+    Description: Retrieve with SSM Parameter Store decryption after deployment.
+    Value: /video-pipeline/pilot/api-key
