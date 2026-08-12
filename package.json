@@ -1,0 +1,45 @@
+{
+  "name": "video-pipeline",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Queue-backed video upload and chunking service",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "dev:worker": "tsx watch src/worker.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/server.js",
+    "worker": "node dist/src/worker.js",
+    "migrate": "tsx src/migrate.ts",
+    "migrate:prod": "node dist/src/migrate.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.864.0",
+    "bullmq": "^5.58.0",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "fluent-ffmpeg": "^2.1.3",
+    "ioredis": "^5.7.0",
+    "multer": "^2.0.2",
+    "pg": "^8.16.3",
+    "pino": "^9.9.0",
+    "pino-http": "^10.5.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/fluent-ffmpeg": "^2.1.27",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^24.2.1",
+    "@types/pg": "^8.15.5",
+    "supertest": "^7.1.4",
+    "@types/supertest": "^6.0.3",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}
