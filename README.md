@@ -114,3 +114,24 @@ aws cloudformation deploy \
 ```
 
 After deployment, read the `HealthUrl` stack output. Initial boot, image builds, and public certificate issuance can take several minutes.
+
+## Current deployment status and next step
+
+The project is intentionally stopping at a **local, Docker-based deployment**. The complete upload-to-chunk pipeline has been integration-tested locally with the API, worker, PostgreSQL, Redis, MinIO, and FFmpeg.
+
+The AWS pilot was prepared but **not deployed**, so this project did not create AWS infrastructure or deployment charges. Deployment was paused after reviewing Free Tier eligibility because the pilot would create recurring compute, storage, and public IPv4 costs.
+
+To resume cloud deployment later:
+
+1. Confirm an AWS credit balance or approve a monthly budget.
+2. Deploy `deploy/pilot-cloudformation.yml`, or redesign the worker for a scale-to-zero platform.
+3. Run the same upload, metadata, chunk-duration, storage, database, and authentication integration checks used locally.
+4. Add cost alerts before leaving cloud resources running.
+
+For now, copy `.env.example` to `.env` and run `docker compose up --build` to use the complete application locally.
+
+### Why GitHub Pages cannot host the complete pipeline
+
+GitHub Pages hosts static HTML, CSS, and browser-side JavaScript. It cannot run the Node.js/Express API, FFmpeg worker, BullMQ, PostgreSQL, Redis, or private object storage required by this project.
+
+GitHub Pages could host a future static landing page, documentation site, or upload interface, but that interface would still need to call a separately hosted backend. The application code can remain on GitHub regardless of where that backend eventually runs.
